@@ -386,7 +386,7 @@ class DupeFinderApp(ctk.CTk):
                     current, total, phase = msg[1], msg[2], msg[3]
                     self.progress_bar.set(current / total if total else 0)
                     self.phase_label.configure(text=f"Schritt: {phase}")
-                    self.count_label.configure(text=f"{_dots(current)} / {_dots(total)}")
+                    self.count_label.configure(text=f"{_dots(current)} / {_dots(total)}" if total else "")
                 elif kind == "current_file":
                     path = msg[1]
                     self.file_label.configure(text=path if len(path) <= 100 else "…" + path[-99:])

@@ -13,6 +13,7 @@ import hashlib
 import os
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from . import storage
 
 try:
     import numpy as np
-    from PIL import Image
+    from PIL import Image, ImageOps
     import imagehash
 
     PERCEPTUAL_AVAILABLE = True
@@ -54,6 +55,7 @@ if PERCEPTUAL_AVAILABLE:
 PARTIAL_HASH_SIZE = 65536  # 64 KB
 HASH_BITS = 64
 AUTOSAVE_SECONDS = 60
+IO_WORKERS = 8
 
 
 # ─── Paths ────────────────────────────────────────────────────────────────
@@ -115,6 +117,9 @@ def perceptual_info(filepath):
             # JPEG draft mode decodes at a fraction of the size; phash shrinks
             # to 32x32 anyway, so this is a large speedup for no accuracy loss.
             img.draft("RGB", (256, 256))
+            # Phones often store rotation as an EXIF flag while messengers bake it
+            # into the pixels; without this the two copies never match.
+            img = ImageOps.exif_transpose(img)
             return str(imagehash.phash(img.convert("RGB"))), pixels
     except Exception:
         return None
@@ -230,6 +235,84 @@ class _Scan:
         if time.monotonic() - self.last_save > AUTOSAVE_SECONDS:
             self.save_partial()
 
+    def fill_cache(self, files, stats, key, compute, label):
+        """
+        Compute ``key`` for every file whose cache entry lacks it.
+
+        Runs on a thread pool: on a network drive nearly all of the time is spent
+        waiting for the NAS, and hashing releases the GIL, so several files in
+        flight at once are many times faster than one after another. Results are
+        written back on this thread only. Returns False when cancelled.
+        """
+        total = len(files)
+        todo = [fp for fp in files if key not in self.cache.get(str(fp), stats[str(fp)])]
+        done = total - len(todo)
+        self.emit(("progress", done, total, label))
+        with ThreadPoolExecutor(max_workers=IO_WORKERS) as pool:
+            for start in range(0, len(todo), IO_WORKERS * 4):
+                if self.stopped():
+                    return False
+                batch = todo[start:start + IO_WORKERS * 4]
+                for fp, values in zip(batch, pool.map(_safe(compute), batch)):
+                    if values is None:
+                        self.emit(("log", f"WARNUNG: Nicht lesbar: {fp}"))
+                    else:
+                        self.cache.entries[str(fp)].update(values)
+                done += len(batch)
+                self.emit(("progress", done, total, label))
+                self.emit(("current_file", str(batch[-1])))
+                self.autosave()
+        return not self.stopped()
+
+
+def _safe(compute):
+    def run(fp):
+        try:
+            return compute(fp)
+        except Exception:
+            return None
+    return run
+
+
+def _as_entry(key, value):
+    return {key: value} if value else None
+
+
+def _dots(number):
+    return f"{number:,}".replace(",", ".")
+
+
+def _walk(root, output_path, emit):
+    """
+    Yield (path, size, mtime) for every supported file below ``root``.
+
+    Size and date come from the directory listing itself (os.scandir). Asking
+    for them per file costs one network round trip each: measured on a NAS
+    share, 1,974 files took 272 s that way versus 8 s from the listing.
+    """
+    stack = [root]
+    while stack:
+        directory = stack.pop()
+        if is_within(directory, output_path):
+            continue
+        try:
+            with os.scandir(directory) as it:
+                entries = sorted(it, key=lambda e: e.name.lower())
+        except OSError:
+            emit(("log", f"WARNUNG: Ordner nicht lesbar: {directory}"))
+            continue
+        subdirs = []
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    subdirs.append(entry.path)
+                elif os.path.splitext(entry.name)[1].lower() in EXTENSIONS:
+                    st = entry.stat(follow_symlinks=False)
+                    yield Path(entry.path), st.st_size, int(st.st_mtime)
+            except OSError:
+                emit(("log", f"WARNUNG: Nicht lesbar: {entry.path}"))
+        stack.extend(reversed(subdirs))
+
 
 def _file_record(path, stats, **extra):
     record = {"path": str(path), "size": stats[0], "mtime": stats[1]}
@@ -241,80 +324,53 @@ def scan(scan_path, output_path, stop_event, emit, resume_data=None, similarity_
     """Run a full scan. Emits ("done", summary) on success."""
     s = _Scan(scan_path, output_path, stop_event, emit, resume_data)
 
-    # ── Phase 0: collect files ───────────────────────────────────────────
-    emit(("status", "Dateien werden gesammelt..."))
+    # ── Phase 1: collect files with size and date ────────────────────────
+    emit(("status", "Phase 1: Dateien werden gesammelt..."))
     all_files = []
-    for dirpath, dirnames, filenames in os.walk(scan_path):
-        if s.stopped():
-            return
-        if is_within(dirpath, output_path):
-            dirnames.clear()
-            continue
-        for fname in filenames:
-            if os.path.splitext(fname)[1].lower() in EXTENSIONS:
-                all_files.append(Path(dirpath) / fname)
-        if len(all_files) % 500 < len(filenames):
-            emit(("current_file", dirpath))
-
-    total = len(all_files)
-    emit(("log", f"{total:,} Dateien gefunden.".replace(",", ".")))
-
-    # ── Phase 1: group by size ───────────────────────────────────────────
-    emit(("status", "Phase 1: Dateigrößen vergleichen..."))
-    size_map = defaultdict(list)
     stats = {}
-    for i, fp in enumerate(all_files):
-        if i % 200 == 0:
+    size_map = defaultdict(list)
+    for fp, size, mtime in _walk(scan_path, output_path, emit):
+        all_files.append(fp)
+        stats[str(fp)] = (size, mtime)
+        # Empty files all hash alike but are not copies of one another.
+        if size > 0:
+            size_map[size].append(fp)
+        if len(all_files) % 500 == 0:
             if s.stopped():
                 return
-            emit(("progress", i, total, "Dateigröße"))
-        try:
-            st = fp.stat()
-        except OSError:
-            emit(("log", f"WARNUNG: Nicht lesbar: {fp}"))
-            continue
-        stats[str(fp)] = (st.st_size, int(st.st_mtime))
-        # Empty files all hash alike but are not copies of one another.
-        if st.st_size > 0:
-            size_map[st.st_size].append(fp)
+            emit(("current_file", str(fp.parent)))
+            emit(("progress", 0, 0, f"{_dots(len(all_files))} Dateien gefunden"))
+    if s.stopped():
+        return
+    total = len(all_files)
+    emit(("log", f"{_dots(total)} Dateien gefunden."))
 
-    candidates = [files for files in size_map.values() if len(files) >= 2]
-    candidate_count = sum(len(f) for f in candidates)
+    candidates = [fp for files in size_map.values() if len(files) >= 2 for fp in files]
 
     # ── Phase 2 + 3: partial, then full hash ─────────────────────────────
-    def hash_phase(groups, count, key, func, label):
-        result = defaultdict(list)
-        done = 0
-        for files in groups:
-            for fp in files:
-                if done % 50 == 0:
-                    if s.stopped():
-                        return None
-                    s.autosave()
-                    emit(("progress", done, count, label))
-                    emit(("current_file", str(fp)))
-                done += 1
-                entry = s.cache.get(str(fp), stats[str(fp)])
-                value = entry.get(key)
-                if not value:
-                    value = func(fp)
-                    if value is None:
-                        emit(("log", f"WARNUNG: Nicht lesbar: {fp}"))
-                        continue
-                    entry[key] = value
-                result[(stats[str(fp)][0], value)].append(fp)
-        return [files for files in result.values() if len(files) >= 2]
+    def hash_phase(files, key, func, label):
+        if not s.fill_cache(files, stats, key, lambda fp: _as_entry(key, func(fp)), label):
+            return None
+        groups = defaultdict(list)
+        for fp in files:
+            value = s.cache.entries[str(fp)].get(key)
+            if value:
+                groups[(stats[str(fp)][0], value)].append(fp)
+        return [fp for group in groups.values() if len(group) >= 2 for fp in group]
 
     emit(("status", "Phase 2: Dateianfänge vergleichen..."))
-    partial_groups = hash_phase(candidates, candidate_count, "partial_hash", partial_hash, "Teil-Prüfsumme")
-    if partial_groups is None:
+    partial_matches = hash_phase(candidates, "partial_hash", partial_hash, "Teil-Prüfsumme")
+    if partial_matches is None:
         return
 
     emit(("status", "Phase 3: Dateien vollständig vergleichen..."))
-    partial_count = sum(len(f) for f in partial_groups)
-    full_groups = hash_phase(partial_groups, partial_count, "full_hash", full_hash, "Prüfsumme")
-    if full_groups is None:
+    full_matches = hash_phase(partial_matches, "full_hash", full_hash, "Prüfsumme")
+    if full_matches is None:
         return
+    by_hash = defaultdict(list)
+    for fp in full_matches:
+        by_hash[s.cache.entries[str(fp)]["full_hash"]].append(fp)
+    full_groups = list(by_hash.values())
 
     # ── Exact duplicates ─────────────────────────────────────────────────
     exact_groups = []
@@ -351,19 +407,17 @@ def scan(scan_path, output_path, stop_event, emit, resume_data=None, similarity_
         ]
         emit(("log", f"{len(images):,} Bilder werden auf Ähnlichkeit geprüft (Schwelle {similarity_threshold} %).".replace(",", ".")))
 
+        def compute(fp):
+            info = perceptual_info(fp)
+            # Undecodable images are cached as such, so they are not retried every scan.
+            return {"phash": info[0], "pixels": info[1]} if info else {"phash": None, "pixels": 0}
+
+        if not s.fill_cache(images, stats, "phash", compute, "Ähnlichkeit"):
+            return
         hashed = []  # (path, phash, pixels)
-        for i, fp in enumerate(images):
-            if i % 20 == 0:
-                if s.stopped():
-                    return
-                s.autosave()
-                emit(("progress", i, len(images), "Ähnlichkeit"))
-                emit(("current_file", str(fp)))
-            entry = s.cache.get(str(fp), stats[str(fp)])
-            if "phash" not in entry:
-                info = perceptual_info(fp)
-                entry["phash"], entry["pixels"] = info if info else (None, 0)
-            if entry["phash"]:
+        for fp in images:
+            entry = s.cache.entries[str(fp)]
+            if entry.get("phash"):
                 hashed.append((fp, entry["phash"], entry["pixels"]))
 
         emit(("status", "Phase 4: Bilder werden verglichen..."))
