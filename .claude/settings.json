@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "dotclaude": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/Jerry0022/dotclaude.git"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "devops@dotclaude": true
+  }
+}

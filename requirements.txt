@@ -1,0 +1,7 @@
+# Runtime dependencies — kept in sync with pyproject.toml
+customtkinter>=5.2
+Pillow>=10.0
+imagehash>=4.3
+numpy>=1.24
+pillow-heif>=0.13
+Send2Trash>=1.8
