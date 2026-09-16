@@ -13,6 +13,7 @@ Python 3.12 · CustomTkinter desktop app · PyInstaller one-file exe · end user
 ## Key Rules
 - **Never lose a photo.** Moves are journaled and undoable; a duplicate only moves while a kept file of its group still exists and is unchanged. Deletion is a separate confirmed step, recycle bin only, explicit warning where no bin exists (network drives, UNC).
 - Similar-image groups are star clusters around the best image (no transitive chaining) and are always reviewed in the UI before moving.
+- Similarity uses a 256-bit pHash; slider levels and their German descriptions (`scanner.LEVEL_DESCRIPTIONS`) are calibrated on real photos — re-measure before changing thresholds. Never commit benchmark data or example images.
 - UI text is German; code, comments, docs, commits English.
 - Runtime state only under `storage.data_dir()` (`%LOCALAPPDATA%\DupeFinder`), never next to the code — the frozen exe runs from a temp dir.
 - No private data in git: scan results, reports, journals and photos contain real names/paths (see `.gitignore`).

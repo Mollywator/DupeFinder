@@ -39,7 +39,7 @@ def stop():
 def make_photo(path, seed, size=(640, 480), quality=95):
     """A structured random image — distinct seeds give visually distinct pictures."""
     rng = np.random.default_rng(seed)
-    small = rng.integers(0, 256, (6, 8, 3), dtype=np.uint8)
+    small = rng.integers(0, 256, (36, 48, 3), dtype=np.uint8)  # photo-like detail at all frequencies
     img = Image.fromarray(small).resize(size, Image.BICUBIC)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix.lower() in (".jpg", ".jpeg"):

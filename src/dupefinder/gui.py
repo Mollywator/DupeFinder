@@ -75,7 +75,7 @@ class DupeFinderApp(ctk.CTk):
                                                 variable=self.mode_var, command=self._on_mode)
         self.mode_menu.pack(side="left", padx=(0, 20))
         ctk.CTkLabel(row, text="Ähnlichkeit:").pack(side="left", padx=(0, 5))
-        self.threshold_var = ctk.IntVar(value=self.settings.get("threshold", 90))
+        self.threshold_var = ctk.IntVar(value=self.settings.get("threshold", 100))
         self.slider = ctk.CTkSlider(row, from_=80, to=100, number_of_steps=20, width=160,
                                     variable=self.threshold_var, command=self._on_threshold)
         self.slider.pack(side="left", padx=(0, 5))
@@ -83,11 +83,17 @@ class DupeFinderApp(ctk.CTk):
         self.threshold_label.pack(side="left")
         self.mode_desc = ctk.CTkLabel(
             options, anchor="w", justify="left", text_color="gray", font=ctk.CTkFont(size=11),
-            text="Nur exakt = findet identische Kopien.   Exakt + Ähnlich = findet zusätzlich verkleinerte, "
-                 "komprimierte oder per WhatsApp verschickte Fassungen (werden vorher zur Prüfung angezeigt).",
+            text="Nur exakt = findet Byte für Byte identische Kopien.   Exakt + Ähnlich = findet zusätzlich "
+                 "optisch gleiche Bilder; sie werden vor dem Aussortieren zur Prüfung angezeigt.",
             wraplength=820,
         )
-        self.mode_desc.pack(fill="x", padx=10, pady=(0, 8))
+        self.mode_desc.pack(fill="x", padx=10, pady=(0, 2))
+        self.level_desc = ctk.CTkLabel(options, anchor="w", justify="left", wraplength=820,
+                                       font=ctk.CTkFont(size=12))
+        self.level_desc.pack(fill="x", padx=10, pady=(4, 0))
+        ctk.CTkLabel(options, text=scanner.LEVEL_FOOTNOTE, anchor="w", justify="left", wraplength=820,
+                     text_color="gray", font=ctk.CTkFont(size=11)).pack(fill="x", padx=10, pady=(2, 8))
+        self._on_threshold(self.threshold_var.get())
         if not scanner.PERCEPTUAL_AVAILABLE:
             self.mode_var.set("Nur exakt")
             self.mode_menu.configure(state="disabled")
@@ -151,6 +157,7 @@ class DupeFinderApp(ctk.CTk):
 
     def _on_threshold(self, value):
         self.threshold_label.configure(text=f"{int(value)} %")
+        self.level_desc.configure(text=f"Bei {int(value)} %: {scanner.describe_level(int(value))}")
 
     def _browse(self, var):
         initial = var.get() if Path(var.get()).is_dir() else str(Path.home())

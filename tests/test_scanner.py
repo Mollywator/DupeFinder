@@ -144,3 +144,13 @@ def test_atomic_write_leaves_no_temp_files(isolated_home):
     storage.save_progress({"a": 2})
     assert storage.load_progress() == {"a": 2}
     assert [p.name for p in isolated_home.iterdir()] == ["progress.json"]
+
+
+def test_100_percent_tolerates_reencoding_only():
+    assert scanner.max_distance_for(100) == scanner.max_distance_for(scanner.IDENTICAL_SIMILARITY) == 7
+    assert scanner.max_distance_for(80) == 51
+
+
+def test_every_slider_value_has_a_description():
+    texts = {scanner.describe_level(p) for p in range(80, 101)}
+    assert len(texts) == len(scanner.LEVEL_DESCRIPTIONS)
