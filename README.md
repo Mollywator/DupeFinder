@@ -11,6 +11,8 @@ offline, nothing is ever deleted without asking.
   (to the recycle bin; with an explicit warning on network drives) is a separate,
   confirmed step.
 - Scans can be cancelled and resumed; hashes are cached between runs.
+- At **100 %** every hit is additionally verified pixel by pixel, so a painted stroke or changed
+  text is not proposed; tiny and single-colour images are left out of the similarity scan.
 - Similarity levels are calibrated on real photos: **100 %** finds the same photo in any size or
   quality; lower levels add edited copies and burst shots. The UI explains each level.
 - Links and junctions are never followed, so a file can never be reported as its own duplicate.

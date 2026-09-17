@@ -21,7 +21,7 @@ from . import storage
 
 try:
     import numpy as np
-    from PIL import Image, ImageOps
+    from PIL import Image, ImageFilter, ImageOps
     import imagehash
 
     PERCEPTUAL_AVAILABLE = True
@@ -58,7 +58,16 @@ PARTIAL_HASH_SIZE = 65536  # 64 KB
 # grabbed twice as many burst shots, while 256 bits separates the two cleanly.
 HASH_SIZE = 16
 HASH_BITS = HASH_SIZE * HASH_SIZE
-PHASH_KEY = "phash16"  # cache key; entries from the old 64-bit hash are ignored
+PHASH_KEY = "phash16b"  # cache key; bumped whenever the hashing rules change
+# Images this small or this flat carry no usable perceptual hash.
+MIN_SIMILAR_SIDE = 32
+MIN_DETAIL_STD = 3.0
+# Pixel verification for the "same photo" level — calibrated on public sample
+# images (see looks_identical).
+VERIFY_CAP = 512
+VERIFY_BLUR = 1.0
+VERIFY_LEVEL = 48
+VERIFY_MAX_PERCENT = 0.005
 # Re-encoding alone moves a 256-bit hash by up to ~3 %, so "100 %" in the UI
 # means "the same photo in any quality", not "bit-identical hash".
 IDENTICAL_SIMILARITY = 97
@@ -116,21 +125,77 @@ def full_hash(filepath):
 
 
 def perceptual_info(filepath):
-    """Return (phash hex, pixel count) or None if the image cannot be decoded."""
+    """
+    Return (phash hex, pixel count), or None when the image must not take part
+    in the similarity comparison at all.
+
+    Excluded are images too small or too flat to carry a meaningful hash: a
+    1x1, 8x45 or single-colour image resembles every other one of its kind, so
+    a folder of accidental mini-screenshots used to end up in one big group.
+    Those files are still found as exact copies.
+    """
     if not PERCEPTUAL_AVAILABLE:
         return None
     try:
         with Image.open(filepath) as img:
-            pixels = img.size[0] * img.size[1]
+            width, height = img.size
+            pixels = width * height
+            if min(width, height) < MIN_SIMILAR_SIDE:
+                return None
             # JPEG draft mode decodes at a fraction of the size; phash shrinks
             # to 64x64 anyway, so this is a large speedup for no accuracy loss.
             img.draft("RGB", (256, 256))
             # Phones often store rotation as an EXIF flag while messengers bake it
             # into the pixels; without this the two copies never match.
-            img = ImageOps.exif_transpose(img)
-            return str(imagehash.phash(img.convert("RGB"), hash_size=HASH_SIZE)), pixels
+            img = ImageOps.exif_transpose(img).convert("RGB")
+            if np.asarray(img.convert("L").resize((64, 64))).std() < MIN_DETAIL_STD:
+                return None
+            return str(imagehash.phash(img, hash_size=HASH_SIZE)), pixels
     except Exception:
         return None
+
+
+def _pixel_count(filepath):
+    with Image.open(filepath) as img:
+        return img.size[0] * img.size[1]
+
+
+def _compare_pixels(filepath, size=None):
+    """Load an image for pixel comparison: oriented, scaled, slightly blurred."""
+    with Image.open(filepath) as img:
+        img.draft("RGB", (VERIFY_CAP, VERIFY_CAP))
+        img = ImageOps.exif_transpose(img).convert("RGB")
+        if size is None:
+            scale = min(1.0, VERIFY_CAP / max(img.size))
+            size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
+        return np.asarray(
+            img.resize(size, Image.LANCZOS).filter(ImageFilter.GaussianBlur(VERIFY_BLUR)), dtype=np.int16
+        ), size
+
+
+def looks_identical(path_a, path_b):
+    """
+    True when two images differ only the way re-encoding and resizing differ.
+
+    The perceptual hash describes coarse brightness patterns, so it cannot see
+    a thin line painted into a picture or a changed word in a screenshot. This
+    compares the pixels themselves, blurred so that compression noise drops
+    out, and counts how much of the image is strongly different. Measured on
+    public sample images: re-encoded, resized and re-compressed copies score
+    0.000 %, a painted stroke 0.27 %, a changed line of text 0.011-0.025 %.
+    """
+    try:
+        # Compare at the resolution of the smaller image — the detail the
+        # lower-quality copy actually carries.
+        small, large = sorted((path_a, path_b), key=_pixel_count)
+        a, size = _compare_pixels(small)
+        b, _ = _compare_pixels(large, size)
+    except Exception:
+        return False
+    if a.shape != b.shape:
+        return False
+    strong = float((np.abs(a - b).max(axis=2) > VERIFY_LEVEL).mean() * 100)
+    return strong <= VERIFY_MAX_PERCENT
 
 
 def format_size(size_bytes):
@@ -196,9 +261,10 @@ def max_distance_for(threshold_percent):
 # (same photo re-encoded / resized, pairs shot <=2 s apart, seconds, minutes,
 # hours and days apart). Shown to the user under the slider.
 LEVEL_DESCRIPTIONS = [
-    (97, "Nur dasselbe Foto in anderer Größe oder Qualität (verkleinert, per WhatsApp verschickt, "
-         "stärker komprimiert). Findet davon praktisch alle – aussortiert wird die schlechtere Fassung. "
-         "Selten dabei: Serienfotos aus derselben Sekunde, die praktisch gleich aussehen (etwa 2 von 10)."),
+    (97, "Nur dasselbe Bild in anderer Größe oder Qualität (verkleinert, per WhatsApp verschickt, "
+         "stärker komprimiert). Aussortiert wird die schlechtere Fassung. Jeder Treffer wird zusätzlich "
+         "Pixel für Pixel geprüft: hineingemalte Striche, geänderter Text oder eine andere Kopfhaltung "
+         "fallen dabei auf und werden nicht vorgeschlagen."),
     (93, "Zusätzlich leicht bearbeitete Fassungen (heller oder dunkler) und einzelne fast identische "
          "Serienfotos aus derselben Sekunde."),
     (88, "Zusätzlich Serienfotos mit kleinen Unterschieden wie geschlossene Augen oder leicht gedrehter Kopf "
@@ -206,8 +272,10 @@ LEVEL_DESCRIPTIONS = [
     (80, "Findet die meisten Serienfotos (etwa 6 von 10) und vereinzelt Fotos, die einige Sekunden "
          "auseinander liegen. Hier ist Prüfen in der Vorschau Pflicht."),
 ]
-LEVEL_FOOTNOTE = ("Nie gefunden (gemessen bis 70 %): Fotos, die Minuten, Stunden oder Tage auseinander liegen. "
-                  "Nicht erkannt: zugeschnittene Bilder und Bilder mit Rand.")
+LEVEL_FOOTNOTE = ("Unter 97 % entfällt die Pixelprüfung, dann können auch leicht veränderte Bilder dabei sein. "
+                  "Nie gefunden (gemessen bis 70 %): Bilder, die Minuten, Stunden oder Tage auseinander liegen. "
+                  "Nicht erkannt: zugeschnittene Bilder und Bilder mit Rand. Sehr kleine (unter 32 Pixel) und "
+                  "einfarbige Bilder werden nur auf exakte Kopien geprüft.")
 
 
 def describe_level(threshold_percent):
@@ -465,7 +533,33 @@ def scan(scan_path, output_path, stop_event, emit, resume_data=None, similarity_
         emit(("status", "Phase 4: Bilder werden verglichen..."))
         emit(("progress", 0, 1, "Vergleichen"))
         priority = [(-px, -stats[str(fp)][0], len(str(fp)), str(fp)) for fp, _, px in hashed]
-        for center, members in cluster_similar([h for _, h, _ in hashed], priority, max_distance):
+        clusters = cluster_similar([h for _, h, _ in hashed], priority, max_distance)
+
+        # At the "same photo" level the hash alone is not enough: confirm pixel
+        # by pixel, so a painted stroke or a changed word is never proposed.
+        verify = similarity_threshold >= IDENTICAL_SIMILARITY
+        rejected = 0
+        if verify and clusters:
+            emit(("status", "Phase 4: Treffer werden Pixel für Pixel geprüft..."))
+            pairs = [(hashed[c][0], hashed[m][0]) for c, ms in clusters for m in ms]
+            keep = {}
+            with ThreadPoolExecutor(max_workers=IO_WORKERS) as pool:
+                for start in range(0, len(pairs), IO_WORKERS * 4):
+                    if s.stopped():
+                        return
+                    batch = pairs[start:start + IO_WORKERS * 4]
+                    for pair, ok in zip(batch, pool.map(lambda p: looks_identical(*p), batch)):
+                        keep[pair] = ok
+                    emit(("progress", start + len(batch), len(pairs), "Pixelprüfung"))
+            checked = clusters
+            clusters = []
+            for center, members in checked:
+                confirmed = [m for m in members if keep.get((hashed[center][0], hashed[m][0]))]
+                rejected += len(members) - len(confirmed)
+                if confirmed:
+                    clusters.append((center, confirmed))
+
+        for center, members in clusters:
             best = hashed[center]
             group = {
                 "type": "similar",
@@ -479,7 +573,9 @@ def scan(scan_path, output_path, stop_event, emit, resume_data=None, similarity_
                 saved_bytes += stats[str(hashed[m][0])][0]
             total_similar += len(members)
             similar_groups.append(group)
-        emit(("log", f"{total_similar:,} ähnliche Bilder in {len(similar_groups):,} Gruppen gefunden.".replace(",", ".")))
+        emit(("log", f"{_dots(total_similar)} ähnliche Bilder in {_dots(len(similar_groups))} Gruppen gefunden."))
+        if rejected:
+            emit(("log", f"{_dots(rejected)} Treffer verworfen: bei der Pixelprüfung doch nicht gleich."))
 
     write_report(scan_path, output_path, exact_groups, similar_groups, total_dupes, total_similar, saved_bytes)
 
