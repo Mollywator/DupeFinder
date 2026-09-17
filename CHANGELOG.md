@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.0
+
+- **Everything is reviewed before it moves.** Exact copies now open the same review window as
+  similar images, with thumbnails and checkboxes, plus an "Einfach alle nehmen" button that
+  accepts every suggestion at once.
+- **The program no longer deletes anything.** After moving it says so and opens the output
+  folder: deleting means deleting that one folder by hand, which cannot hit an original.
+  The delete button and the Send2Trash dependency are gone.
+- **Honest suggestion label.** The kept file is the highest resolution and, on a tie, the
+  OLDEST file — an edited copy is newer and can even be the larger one. The label now reads
+  "Vorschlag: höchste Auflösung" or "Vorschlag: ältestes Bild" instead of "beste Qualität".
+
 ## 1.3.0
 
 - **100 % now means visually identical.** Every similarity hit at that level is verified pixel

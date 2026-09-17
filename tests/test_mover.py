@@ -73,27 +73,6 @@ def test_undo_does_not_overwrite_new_file(tmp_path, stop, events):
     assert mover.open_journals()  # still undoable / deletable
 
 
-def test_delete_only_touches_journal_files(tmp_path, stop, events, monkeypatch):
-    root, out = tmp_path / "Bilder", tmp_path / "out"
-    make_pair(root)
-    move(root, out, scan_groups(root, out, stop, events), stop, events)
-    unrelated = out / "eigene_datei.txt"
-    unrelated.write_text("nicht anfassen")
-
-    trashed = []
-
-    def fake_trash(path):
-        trashed.append(path)
-        os.remove(path)
-
-    monkeypatch.setattr(mover, "send2trash", fake_trash)
-    mover.delete_moved(mover.open_journals()[0], events)
-
-    assert len(trashed) == 1
-    assert unrelated.exists()
-    assert mover.open_journals() == []
-
-
 def test_journal_survives_torn_line(tmp_path, stop, events):
     root, out = tmp_path / "Bilder", tmp_path / "out"
     make_pair(root)
@@ -114,10 +93,6 @@ def test_stop_during_move_is_undoable(tmp_path, events):
     stop.set()
     mover.move_duplicates(str(root), str(out), groups, stop, events)
     assert "move_stopped" in events.kinds()
-
-
-def test_unc_path_has_no_recycle_bin():
-    assert mover.has_recycle_bin(r"\\nas\bilder\foto.jpg") is False
 
 
 def test_review_keeps_at_least_one_file():
@@ -182,30 +157,6 @@ def test_keeper_edited_after_scan_blocks_move(tmp_path, stop, events):
     assert copy.exists()
 
 
-def test_delete_keeps_file_when_original_vanished(tmp_path, stop, events, monkeypatch):
-    root, out = tmp_path / "Bilder", tmp_path / "out"
-    original, copy = make_pair(root)
-    move(root, out, scan_groups(root, out, stop, events), stop, events)
-    original.unlink()  # the kept copy is gone — the moved one is now the last copy
-    monkeypatch.setattr(mover, "send2trash", lambda p: os.remove(p))
-
-    mover.delete_moved(mover.open_journals()[0], events)
-    assert events.last("delete_done")["skipped"] == 1
-    assert (out / "Kopien" / "foto.jpg").exists()
-    assert mover.open_journals()  # still undoable
-
-
-def test_missing_recycle_bin_support_deletes_nothing(tmp_path, stop, events, monkeypatch):
-    root, out = tmp_path / "Bilder", tmp_path / "out"
-    make_pair(root)
-    move(root, out, scan_groups(root, out, stop, events), stop, events)
-    monkeypatch.setattr(mover, "send2trash", None)
-
-    mover.delete_moved(mover.open_journals()[0], events)
-    assert events.last("delete_done")["deleted"] == 0
-    assert (out / "Kopien" / "foto.jpg").exists()
-
-
 def test_failed_move_is_not_undone_or_deleted(tmp_path, stop, events, monkeypatch):
     root, out = tmp_path / "Bilder", tmp_path / "out"
     _, copy = make_pair(root)
@@ -234,3 +185,19 @@ def test_journal_written_before_the_move(tmp_path, stop, events, monkeypatch):
     monkeypatch.setattr(mover.shutil, "move", spy)
     move(root, out, groups, stop, events)
     assert seen == [1]
+
+
+def test_review_keeps_the_group_type(tmp_path):
+    exact = {"type": "exact", "hash": "abc", "original": {"path": "a"}, "duplicates": [{"path": "b"}]}
+    approved = build_approved_groups([exact], [{"b"}])
+    assert approved[0]["type"] == "exact"
+    assert approved[0]["hash"] == "abc"
+
+
+def test_keep_reason_never_claims_quality():
+    from dupefinder.review import _keep_reason
+
+    keeper = {"path": "a", "pixels": 400, "mtime": 10}
+    assert _keep_reason(keeper, [{"path": "b", "pixels": 100, "mtime": 5}]) == "Vorschlag: höchste Auflösung"
+    assert _keep_reason(keeper, [{"path": "b", "pixels": 400, "mtime": 20}]) == "Vorschlag: ältestes Bild"
+    assert "Qualität" not in _keep_reason(keeper, [{"path": "b"}])

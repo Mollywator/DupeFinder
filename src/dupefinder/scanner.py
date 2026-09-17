@@ -532,7 +532,9 @@ def scan(scan_path, output_path, stop_event, emit, resume_data=None, similarity_
 
         emit(("status", "Phase 4: Bilder werden verglichen..."))
         emit(("progress", 0, 1, "Vergleichen"))
-        priority = [(-px, -stats[str(fp)][0], len(str(fp)), str(fp)) for fp, _, px in hashed]
+        # Highest resolution wins; on a tie the OLDEST file, because an edited
+        # copy (a stroke painted in) is newer and can even be the larger file.
+        priority = [(-px, stats[str(fp)][1], -stats[str(fp)][0], str(fp)) for fp, _, px in hashed]
         clusters = cluster_similar([h for _, h, _ in hashed], priority, max_distance)
 
         # At the "same photo" level the hash alone is not enough: confirm pixel
