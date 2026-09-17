@@ -89,3 +89,24 @@ def test_unreadable_file_never_counts_as_identical(tmp_path):
     broken = tmp_path / "kaputt.png"
     broken.write_bytes(b"not an image")
     assert scanner.looks_identical(photo, broken) is False
+
+
+def test_same_resolution_keeps_the_older_file(tmp_path, stop, events):
+    """An edited copy is newer and can be the larger file — the original must win."""
+    import os
+
+    root = tmp_path / "Bilder"
+    original = make_photo(root / "original.png", 8, size=(800, 600))
+    with Image.open(original) as img:
+        edited = img.copy()
+    ImageDraw.Draw(edited).line([(400, 60), (430, 400)], fill=(30, 120, 255), width=3)
+    edited.save(root / "bemalt.png")
+    os.utime(original, (1_000_000, 1_000_000))
+    os.utime(root / "bemalt.png", (2_000_000, 2_000_000))
+    assert (root / "bemalt.png").stat().st_size > original.stat().st_size
+
+    done = run(root, tmp_path / "out", stop, events, 90)
+    assert done["similar"] == 1
+    group = done["similar_groups"][0]
+    assert group["original"]["path"] == str(original)
+    assert [d["path"] for d in group["duplicates"]] == [str(root / "bemalt.png")]

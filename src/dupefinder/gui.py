@@ -120,9 +120,9 @@ class DupeFinderApp(ctk.CTk):
         self.undo_btn = ctk.CTkButton(extra, text="Letztes Aussortieren rückgängig", command=self._undo,
                                       state="disabled", width=250, **grey)
         self.undo_btn.pack(side="left", padx=(0, 8))
-        self.delete_btn = ctk.CTkButton(extra, text="Aussortierte Dateien löschen…", command=self._delete,
-                                        state="disabled", width=240, **grey)
-        self.delete_btn.pack(side="left", padx=(0, 8))
+        self.output_btn = ctk.CTkButton(extra, text="Aussortiert-Ordner öffnen", command=self._open_output,
+                                        width=210, **grey)
+        self.output_btn.pack(side="left", padx=(0, 8))
         self.report_btn = ctk.CTkButton(extra, text="Bericht öffnen", command=self._open_report, width=120, **grey)
         self.report_btn.pack(side="left")
 
@@ -197,16 +197,15 @@ class DupeFinderApp(ctk.CTk):
         self._enable(self.stop_btn, busy)
         self._enable(self.report_btn, not busy)
         if busy:
-            for btn in (self.move_btn, self.undo_btn, self.delete_btn):
+            for btn in (self.move_btn, self.undo_btn):
                 self._enable(btn, False)
         else:
             self._refresh_buttons()
 
     def _refresh_buttons(self):
         self._enable(self.move_btn, bool(self.exact_groups or self.similar_groups))
-        has_journal = bool(mover.open_journals())
-        self._enable(self.undo_btn, has_journal)
-        self._enable(self.delete_btn, has_journal)
+        self._enable(self.undo_btn, bool(mover.open_journals()))
+        self._enable(self.output_btn, True)
 
     def _show_results(self):
         exact = sum(len(g["duplicates"]) for g in self.exact_groups)
@@ -263,36 +262,30 @@ class DupeFinderApp(ctk.CTk):
 
     # ── Move ─────────────────────────────────────────────────────────────
     def _start_move(self):
-        if not (self.exact_groups or self.similar_groups):
+        groups = self.exact_groups + self.similar_groups
+        if not groups:
             return
-        if self.similar_groups:
-            self._log(f"{_dots(len(self.similar_groups))} Gruppen ähnlicher Bilder zur Prüfung geöffnet.")
-            ReviewWindow(self, self.similar_groups, self._after_review,
-                         icon=str(ICON) if ICON.exists() else None)
-        else:
-            self._after_review([])
+        self._log(f"{_dots(len(groups))} Gruppen zur Prüfung geöffnet – du entscheidest, was verschoben wird.")
+        ReviewWindow(self, groups, self._after_review, icon=str(ICON) if ICON.exists() else None)
 
-    def _after_review(self, approved_similar):
-        if approved_similar is None:
+    def _after_review(self, approved):
+        if approved is None:
             self._log("Prüfung abgebrochen – nichts verschoben.")
             return
-        groups = self.exact_groups + approved_similar
-        total = sum(len(g["duplicates"]) for g in groups)
+        total = sum(len(g["duplicates"]) for g in approved)
         if total == 0:
             messagebox.showinfo("Nichts zu tun", "Es wurde nichts zum Aussortieren ausgewählt.", parent=self)
             return
-        exact = sum(len(g["duplicates"]) for g in self.exact_groups)
         output_path = self.output_var.get().strip()
         if not messagebox.askyesno(
             "Aussortieren bestätigen",
             f"{_dots(total)} Dateien werden verschoben nach:\n{output_path}\n\n"
-            f"• {_dots(exact)} exakte Kopien\n• {_dots(total - exact)} ähnliche Bilder (von dir geprüft)\n\n"
-            "Es wird noch nichts gelöscht. Du kannst das danach rückgängig machen.\n\nFortfahren?",
+            "Gelöscht wird nichts. Du kannst das danach rückgängig machen.\n\nFortfahren?",
             parent=self,
         ):
             return
         self._log(f"\n{_dots(total)} Dateien werden nach {output_path} verschoben...")
-        self._run(mover.move_duplicates, self.scan_var.get().strip(), output_path, groups,
+        self._run(mover.move_duplicates, self.scan_var.get().strip(), output_path, approved,
                   self.stop_event, self.queue.put)
 
     def _after_move(self, info):
@@ -304,16 +297,24 @@ class DupeFinderApp(ctk.CTk):
             messagebox.showinfo("Fertig", "Es wurde nichts verschoben. Details stehen im Protokoll.", parent=self)
             return
         output_path = self.output_var.get().strip()
-        text = (f"{_dots(info['moved'])} Dateien liegen jetzt in:\n{output_path}\n")
+        text = f"{_dots(info['moved'])} Dateien liegen jetzt in:\n{output_path}\n"
         if info["skipped"] or info["errors"]:
             text += f"\n({_dots(info['skipped'])} übersprungen, {_dots(info['errors'])} Fehler – siehe Protokoll)\n"
-        text += "\nSchau sie dir gerne vorher an.\n\nSollen die aussortierten Dateien jetzt gelöscht werden?"
-        if messagebox.askyesno("Aussortieren abgeschlossen", text, default=messagebox.NO, parent=self):
-            self._delete(confirmed=True)
-        else:
-            self._log("Die Dateien bleiben im Aussortiert-Ordner. Später löschen oder zurücklegen ist jederzeit möglich.")
+        # The program never deletes: emptying that one folder by hand cannot hit
+        # an original by accident.
+        text += ("\nDas Programm löscht nichts. Sieh dir den Ordner in Ruhe an – und wenn alles passt, "
+                 "lösche einfach diesen ganzen Aussortiert-Ordner.\n\nIch öffne ihn jetzt.")
+        messagebox.showinfo("Aussortieren abgeschlossen", text, parent=self)
+        self._open_output()
+        self._log("Zum Löschen den Aussortiert-Ordner selbst löschen. „Rückgängig“ legt alles zurück.")
 
-    # ── Undo / delete ────────────────────────────────────────────────────
+    def _open_output(self):
+        try:
+            os.startfile(self.output_var.get().strip())
+        except OSError as e:
+            self._log(f"Ordner konnte nicht geöffnet werden: {e}")
+
+    # ── Undo ─────────────────────────────────────────────────────────────
     def _undo(self):
         journals = mover.open_journals()
         if not journals:
@@ -325,36 +326,6 @@ class DupeFinderApp(ctk.CTk):
                                    "zurücklegen?", parent=self):
             return
         self._run(mover.undo, journal, self.queue.put)
-
-    def _delete(self, confirmed=False):
-        journals = mover.open_journals()
-        files = [f for j in journals for f in mover.pending_files(j)]
-        if not files:
-            messagebox.showinfo("Nichts zu löschen", "Es liegen keine aussortierten Dateien mehr vor.", parent=self)
-            for j in journals:
-                j.mark(mover.STATE_DELETED)
-            self._refresh_buttons()
-            return
-        roots = {os.path.splitdrive(os.path.abspath(f))[0].lower() or f for f in files}
-        permanent = not all(mover.has_recycle_bin(root + "\\") for root in roots)
-        if permanent:
-            if not messagebox.askyesno(
-                "Achtung: kein Papierkorb",
-                f"Die {_dots(len(files))} Dateien liegen auf einem Netzlaufwerk. Dort gibt es keinen Papierkorb – "
-                "sie wären ENDGÜLTIG weg und können nicht wiederhergestellt werden.\n\nWirklich endgültig löschen?",
-                icon="warning", default=messagebox.NO, parent=self,
-            ):
-                return
-        elif not confirmed and not messagebox.askyesno(
-            "Aussortierte Dateien löschen",
-            f"{_dots(len(files))} aussortierte Dateien in den Papierkorb legen?", default=messagebox.NO, parent=self,
-        ):
-            return
-        self._run(self._delete_all, journals, permanent)
-
-    def _delete_all(self, journals, permanent):
-        for journal in journals:
-            mover.delete_moved(journal, self.queue.put, permanent=permanent)
 
     # ── Worker plumbing ──────────────────────────────────────────────────
     def _run(self, target, *args):
@@ -412,8 +383,6 @@ class DupeFinderApp(ctk.CTk):
                     self._log("Bereits verschobene Dateien lassen sich mit „Rückgängig“ zurücklegen.")
                 elif kind == "undo_done":
                     self.status_var.set(f"{_dots(msg[1]['restored'])} Dateien zurückgelegt")
-                elif kind == "delete_done":
-                    self.status_var.set(f"{_dots(msg[1]['deleted'])} Dateien gelöscht")
                 elif kind == "failed":
                     self.status_var.set("Fehler – siehe Protokoll")
                 elif kind == "worker_exit":

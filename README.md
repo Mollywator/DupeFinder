@@ -5,11 +5,10 @@ offline, nothing is ever deleted without asking.
 
 - **Exact duplicates** (byte-identical copies) via size → 64 KB partial hash → full SHA-256.
 - **Similar images** (resized, recompressed, sent via WhatsApp) via perceptual hashing.
-  Each similar group is shown with thumbnails for review before anything moves.
-- **Safe by design:** duplicates are *moved* into a separate folder, mirroring the
-  original structure. Every move run is journaled and can be undone. Deleting
-  (to the recycle bin; with an explicit warning on network drives) is a separate,
-  confirmed step.
+  Every group, exact copies included, is shown with thumbnails for review before anything moves.
+- **Safe by design:** the program never deletes. Duplicates are *moved* into a separate folder,
+  mirroring the original structure; deleting means removing that folder by hand. Every move run
+  is journaled and can be undone.
 - Scans can be cancelled and resumed; hashes are cached between runs.
 - At **100 %** every hit is additionally verified pixel by pixel, so a painted stroke or changed
   text is not proposed; tiny and single-colour images are left out of the similarity scan.
@@ -26,8 +25,8 @@ offline, nothing is ever deleted without asking.
 2. **Hier suchen:** den Bilder-Ordner wählen. **Aussortieren nach:** einen Ordner für die Duplikate.
 3. **Suche starten.** Große Sammlungen dauern beim ersten Mal länger; Abbrechen ist jederzeit möglich,
    beim nächsten Start geht es dort weiter.
-4. **Duplikate aussortieren.** Ähnliche Bilder werden vorher mit Vorschau angezeigt — nur Angehaktes wird verschoben.
-5. Danach fragt das Programm, ob die aussortierten Dateien gelöscht werden sollen (Papierkorb).
+4. **Duplikate aussortieren.** Jede Gruppe wird vorher mit Vorschau angezeigt — auch identische Kopien. Nur Angehaktes wird verschoben; „Einfach alle nehmen“ übernimmt alle Vorschläge auf einmal.
+5. Danach öffnet das Programm den Aussortiert-Ordner. Löschen heißt: diesen Ordner selbst löschen.
    Bis dahin macht **Letztes Aussortieren rückgängig** alles wieder wie vorher.
 
 ## Development
@@ -52,8 +51,8 @@ pwsh ./build.ps1
 | Path | Purpose |
 |---|---|
 | `src/dupefinder/scanner.py` | File collection, hashing phases, similarity clustering, report |
-| `src/dupefinder/mover.py` | Move with journal, undo, delete to recycle bin |
-| `src/dupefinder/review.py` | Thumbnail review window for similar groups |
+| `src/dupefinder/mover.py` | Move with journal and undo (no delete by design) |
+| `src/dupefinder/review.py` | Thumbnail review window for every group |
 | `src/dupefinder/gui.py` | Main window (German UI) |
 | `src/dupefinder/storage.py` | State in `DupeFinder-Daten` next to the exe (atomic writes) |
 | `src/dupefinder/placement.py` | First start: moves the exe into its own subfolder if its folder holds other files |

@@ -76,7 +76,8 @@ class ReviewWindow(ctk.CTkToplevel):
         ctk.CTkLabel(
             self, anchor="w", justify="left", text_color="gray",
             text="Angehakte Bilder werden in den Aussortiert-Ordner verschoben, die anderen bleiben liegen. "
-                 "Mindestens ein Bild pro Gruppe bleibt immer. Klick auf ein Bild öffnet es groß.",
+                 "Mindestens ein Bild pro Gruppe bleibt immer. Klick auf ein Bild öffnet es groß. "
+                 "Gelöscht wird nichts – das entscheidest du danach selbst im Ordner.",
         ).pack(fill="x", padx=15)
 
         self.grid_frame = ctk.CTkScrollableFrame(self)
@@ -92,6 +93,8 @@ class ReviewWindow(ctk.CTkToplevel):
         self.next_btn.pack(side="left", padx=8)
         ctk.CTkButton(nav, text="Alle behalten", width=120, fg_color="gray40", hover_color="gray30",
                       command=self._keep_all).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(nav, text="Einfach alle nehmen", width=170, fg_color="#1d4ed8", hover_color="#1e40af",
+                      command=self._take_all).pack(side="left", padx=(8, 0))
 
         ctk.CTkButton(nav, text="Abbrechen", width=110, fg_color="gray40", hover_color="gray30",
                       command=self._cancel).pack(side="right")
@@ -108,7 +111,8 @@ class ReviewWindow(ctk.CTkToplevel):
         group = self.groups[self.index]
         files = [group["original"]] + group["duplicates"]
         chosen = self.decisions[self.index]
-        self.title_label.configure(text=f"Gruppe {self.index + 1} von {len(self.groups)}")
+        kind = "identische Kopien" if group.get("type") == "exact" else "ähnliche Bilder"
+        self.title_label.configure(text=f"Gruppe {self.index + 1} von {len(self.groups)} · {kind}")
         self.count_label.configure(text=f"{len(files)} Bilder · {len(chosen)} zum Aussortieren angehakt")
         self.prev_btn.configure(state="normal" if self.index > 0 else "disabled")
         self.next_btn.configure(state="normal" if self.index < len(self.groups) - 1 else "disabled")
@@ -133,7 +137,7 @@ class ReviewWindow(ctk.CTkToplevel):
             if record.get("size"):
                 details.append(format_size(record["size"]))
             if i == 0:
-                details.append("beste Qualität")
+                details.append(_keep_reason(record, files[1:]))
             ctk.CTkLabel(cell, text=" · ".join(details), font=ctk.CTkFont(size=11)).pack()
             ctk.CTkLabel(cell, text=_short(Path(path).name, 32), font=ctk.CTkFont(size=11, weight="bold")).pack()
             ctk.CTkLabel(cell, text=_short(str(Path(path).parent), 36), font=ctk.CTkFont(size=10),
@@ -164,6 +168,21 @@ class ReviewWindow(ctk.CTkToplevel):
     def _keep_all(self):
         self.decisions[self.index] = set()
         self._show()
+
+    def _take_all(self):
+        """Accept the suggestion for every group — one click instead of paging."""
+        total = sum(len(g["duplicates"]) for g in self.groups)
+        if not messagebox.askyesno(
+            "Einfach alle nehmen",
+            f"Für alle {len(self.groups)} Gruppen den Vorschlag übernehmen?\n\n"
+            f"{total} Dateien werden dann aussortiert. Aus jeder Gruppe bleibt das vorgeschlagene Bild liegen.",
+            parent=self,
+        ):
+            return
+        self.decisions = [{d["path"] for d in g["duplicates"]} for g in self.groups]
+        self.seen = set(range(len(self.groups)))
+        self._close()
+        self.on_finish(build_approved_groups(self.groups, self.decisions))
 
     def _open(self, path):
         try:
@@ -227,8 +246,22 @@ def build_approved_groups(groups, decisions):
         move = [f for f in files if f["path"] in chosen]
         if not move or not keep:
             continue
-        approved.append({"type": "similar", "original": keep[0], "also_keep": keep[1:], "duplicates": move})
+        approved.append({"type": group.get("type", "similar"), "hash": group.get("hash"),
+                         "original": keep[0], "also_keep": keep[1:], "duplicates": move})
     return approved
+
+
+def _keep_reason(keeper, others):
+    """
+    Say why this file is the suggestion — never "best quality", which the
+    program cannot judge: a painted-over copy can be the larger file.
+    """
+    pixels = keeper.get("pixels")
+    if pixels and any(o.get("pixels") and o["pixels"] < pixels for o in others):
+        return "Vorschlag: höchste Auflösung"
+    if keeper.get("mtime") and all(o.get("mtime", 0) >= keeper["mtime"] for o in others):
+        return "Vorschlag: ältestes Bild"
+    return "Vorschlag zum Behalten"
 
 
 def _short(text, limit):

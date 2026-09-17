@@ -17,14 +17,9 @@ from pathlib import Path
 from . import storage
 from .scanner import is_within, normalize_group
 
-try:
-    from send2trash import send2trash
-except ImportError:  # pragma: no cover
-    send2trash = None
-
 STATE_MOVED = "moved"
 STATE_UNDONE = "undone"
-STATE_DELETED = "deleted"
+STATE_DELETED = "deleted"  # only still read from journals written before 1.4.0
 
 
 # ─── Journal ──────────────────────────────────────────────────────────────
@@ -258,71 +253,5 @@ def undo(journal, emit):
     emit(("undo_done", {"restored": restored, "conflicts": conflicts}))
 
 
-# ─── Delete ───────────────────────────────────────────────────────────────
-
-DRIVE_REMOTE = 4
-
-
-def has_recycle_bin(path):
-    """
-    Network drives and UNC shares have no recycle bin: Windows deletes files
-    there permanently, without saying so. Callers must ask before that happens.
-    """
-    path = os.path.abspath(str(path))
-    if path.startswith("\\\\"):
-        return False
-    if os.name != "nt":
-        return True
-    try:
-        import ctypes
-
-        root = os.path.splitdrive(path)[0] + "\\"
-        return ctypes.windll.kernel32.GetDriveTypeW(root) != DRIVE_REMOTE
-    except Exception:
-        return False
-
-
-def pending_files(journal):
-    return [m["dest"] for m in journal.moves if Path(m["dest"]).exists()]
-
-
-def delete_moved(journal, emit, permanent=False):
-    """Send the files a journal moved to the recycle bin (or delete them if ``permanent``)."""
-    header, moves, state = journal.read()
-    pending = [m for m in moves if Path(m["dest"]).exists()]
-    files = []
-    deleted = errors = skipped = 0
-    emit(("status", "Aussortierte Dateien werden gelöscht..."))
-    for i, move in enumerate(pending):
-        if i % 25 == 0:
-            emit(("progress", i, len(pending), "Löschen"))
-        path = move["dest"]
-        # The kept copy may have been deleted or edited since the move; then
-        # this "duplicate" is the last copy and must survive.
-        keepers = [k for k in move.get("keepers", []) if Path(k).exists() and not _same_file(k, path)]
-        if not keepers:
-            skipped += 1
-            emit(("log", f"Nicht gelöscht, das behaltene Original ist nicht mehr da: {path}"))
-            continue
-        if not permanent and send2trash is None:
-            errors += 1
-            emit(("log", "FEHLER: Papierkorb-Funktion nicht verfügbar – nichts gelöscht."))
-            break
-        try:
-            if permanent:
-                os.remove(path)
-            else:
-                send2trash(path)
-            deleted += 1
-            files.append(path)
-        except Exception as e:
-            errors += 1
-            emit(("log", f"FEHLER beim Löschen: {path} -> {e}"))
-    if errors == 0 and skipped == 0:
-        journal.mark(STATE_DELETED)
-    if header.get("output_path"):
-        _prune_empty_dirs(files, header["output_path"])
-    emit(("progress", 1, 1, "Löschen"))
-    target = "endgültig gelöscht" if permanent else "in den Papierkorb gelegt"
-    emit(("log", f"{deleted} Dateien {target}, {skipped} zum Schutz behalten, {errors} Fehler."))
-    emit(("delete_done", {"deleted": deleted, "errors": errors, "skipped": skipped, "permanent": permanent}))
+# The program deliberately has no delete: the user removes the output folder
+# by hand once they are happy, which cannot hit an original by accident.
