@@ -1,9 +1,10 @@
 # ---------------------------------------------------------------------------
 #  Private photo data never enters this repo.
-#  Scan results, reports and journals live in %LOCALAPPDATA%\DupeFinder and
+#  Scan results, reports and journals live in DupeFinder-Daten/ and
 #  contain real folder and file names. The rules below also catch copies that
 #  land in the project folder by accident.
 # ---------------------------------------------------------------------------
+DupeFinder-Daten/
 progress.json
 dupefinder_report.txt
 bericht.txt

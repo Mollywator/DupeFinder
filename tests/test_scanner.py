@@ -154,3 +154,92 @@ def test_100_percent_tolerates_reencoding_only():
 def test_every_slider_value_has_a_description():
     texts = {scanner.describe_level(p) for p in range(80, 101)}
     assert len(texts) == len(scanner.LEVEL_DESCRIPTIONS)
+
+
+# ─── Data location and first-start placement ──────────────────────────────
+
+from dupefinder import placement
+
+
+def fake_exe(folder):
+    folder.mkdir(parents=True, exist_ok=True)
+    exe = folder / "DupeFinder.exe"
+    exe.write_bytes(b"MZ")
+    return exe
+
+
+def test_data_lives_next_to_the_program(tmp_path, monkeypatch):
+    monkeypatch.delenv("DUPEFINDER_HOME")
+    monkeypatch.setattr(storage, "_app_dir_override", tmp_path)
+    assert storage.data_dir() == tmp_path / "DupeFinder-Daten"
+    storage.save_settings({"a": 1})
+    assert (tmp_path / "DupeFinder-Daten" / "settings.json").exists()
+
+
+def test_first_start_in_clean_folder_stays(tmp_path, monkeypatch):
+    monkeypatch.delenv("DUPEFINDER_HOME")
+    exe = fake_exe(tmp_path / "Programm")
+    assert placement.first_start(exe) is None
+    assert exe.exists()
+    assert (exe.parent / "DupeFinder-Daten" / placement.MARKER).exists()
+
+
+def test_first_start_in_crowded_folder_moves_into_subfolder(tmp_path, monkeypatch):
+    monkeypatch.delenv("DUPEFINDER_HOME")
+    downloads = tmp_path / "Downloads"
+    exe = fake_exe(downloads)
+    (downloads / "rechnung.pdf").write_bytes(b"x")
+
+    moved = placement.first_start(exe)
+
+    assert moved == downloads / "DupeFinder" / "DupeFinder.exe"
+    assert moved.exists() and not exe.exists()
+    assert (downloads / "DupeFinder" / "DupeFinder-Daten" / placement.MARKER).exists()
+    assert sorted(p.name for p in downloads.iterdir()) == ["DupeFinder", "rechnung.pdf"]
+
+
+def test_check_runs_only_on_first_start(tmp_path, monkeypatch):
+    monkeypatch.delenv("DUPEFINDER_HOME")
+    exe = fake_exe(tmp_path / "Programm")
+    placement.first_start(exe)
+    (exe.parent / "notiz.txt").write_text("später dazugelegt")
+    assert placement.first_start(exe) is None
+    assert exe.exists()
+
+
+def test_existing_foreign_subfolder_is_not_reused(tmp_path, monkeypatch):
+    monkeypatch.delenv("DUPEFINDER_HOME")
+    desktop = tmp_path / "Desktop"
+    exe = fake_exe(desktop)
+    (desktop / "DupeFinder").mkdir()
+    (desktop / "DupeFinder" / "fremd.txt").write_text("x")
+
+    moved = placement.first_start(exe)
+    assert moved.parent.name == "DupeFinder (2)"
+    assert (desktop / "DupeFinder" / "fremd.txt").exists()
+
+
+def test_locked_exe_is_copied_and_cleaned_up_later(tmp_path, monkeypatch):
+    monkeypatch.delenv("DUPEFINDER_HOME")
+    downloads = tmp_path / "Downloads"
+    exe = fake_exe(downloads)
+    (downloads / "anderes.zip").write_bytes(b"x")
+    scheduled = []
+
+    def locked(src, dst):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(placement.os, "replace", locked)
+    monkeypatch.setattr(placement, "_delete_after_exit", scheduled.append)
+
+    moved = placement.first_start(exe)
+    assert moved.exists() and exe.exists()
+    assert scheduled == [exe]
+
+
+def test_all_modules_compile_and_import():
+    import importlib
+
+    for name in ("gui", "review", "placement", "mover", "scanner", "storage"):
+        importlib.import_module(f"dupefinder.{name}")
+
