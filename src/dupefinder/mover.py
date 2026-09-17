@@ -47,8 +47,11 @@ class Journal:
             f.flush()
             os.fsync(f.fileno())
 
-    def add_move(self, src, dest):
-        self._append({"event": "move", "src": str(src), "dest": str(dest)})
+    def add_move(self, src, dest, keepers):
+        self._append({"event": "move", "src": str(src), "dest": str(dest), "keepers": [str(k) for k in keepers]})
+
+    def add_failed(self, dest):
+        self._append({"event": "failed", "dest": str(dest)})
 
     def mark(self, state):
         self._append({"event": state, "at": datetime.now().isoformat(timespec="seconds")})
@@ -67,6 +70,12 @@ class Journal:
                         header = record
                     elif event == "move":
                         moves.append(record)
+                    elif event == "failed":
+                        # Cancels the move entry written just before the attempt.
+                        for k in range(len(moves) - 1, -1, -1):
+                            if moves[k]["dest"] == record.get("dest"):
+                                del moves[k]
+                                break
                     elif event in (STATE_UNDONE, STATE_DELETED):
                         state = event
         except OSError:
@@ -107,7 +116,7 @@ def _unique_destination(dest):
 
 
 def _still_same(record):
-    """The file still exists and was not replaced since the scan."""
+    """The file still exists and was not replaced or edited since the scan."""
     path = Path(record["path"])
     try:
         st = path.stat()
@@ -115,7 +124,21 @@ def _still_same(record):
         return False
     if "size" in record and st.st_size != record["size"]:
         return False
+    if "mtime" in record and int(st.st_mtime) != record["mtime"]:
+        return False
     return True
+
+
+def _same_file(a, b):
+    """
+    True when two paths reach the same physical file — through a junction,
+    a symlink or a second drive mapping. Moving such a "duplicate" would move
+    the only copy there is.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def move_duplicates(scan_path, output_path, groups, stop_event, emit):
@@ -137,7 +160,8 @@ def move_duplicates(scan_path, output_path, groups, stop_event, emit):
     for group in groups:
         kept = [group["original"]] + group.get("also_keep", [])
         kept_paths = {os.path.normcase(os.path.abspath(k["path"])) for k in kept}
-        keeper_exists = any(_still_same(k) for k in kept)
+        keepers = [k["path"] for k in kept if _still_same(k)]
+        keeper_exists = bool(keepers)
         for dupe in group["duplicates"]:
             if stop_event.is_set():
                 emit(("log", f"Abgebrochen. {moved} von {total} verschoben."))
@@ -159,17 +183,24 @@ def move_duplicates(scan_path, output_path, groups, stop_event, emit):
                 skipped += 1
                 emit(("log", f"Übersprungen (nicht mehr vorhanden oder verändert): {src}"))
                 continue
+            if any(_same_file(src, k) for k in keepers):
+                skipped += 1
+                emit(("log", f"Übersprungen (dieselbe Datei über eine Ordner-Verknüpfung): {src}"))
+                continue
             try:
                 rel = src.relative_to(scan_path)
             except ValueError:
                 rel = Path(src.name)
             dest = _unique_destination(output_root / rel)
+            # Journal first: if the program dies mid-move, the entry already
+            # points undo at the file.
+            journal.add_move(src, dest, keepers)
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(src), str(dest))
-                journal.add_move(src, dest)
                 moved += 1
             except OSError as e:
+                journal.add_failed(dest)
                 errors += 1
                 emit(("log", f"FEHLER: {src} -> {e}"))
 
@@ -258,26 +289,40 @@ def pending_files(journal):
 def delete_moved(journal, emit, permanent=False):
     """Send the files a journal moved to the recycle bin (or delete them if ``permanent``)."""
     header, moves, state = journal.read()
-    files = [m["dest"] for m in moves if Path(m["dest"]).exists()]
-    deleted = errors = 0
+    pending = [m for m in moves if Path(m["dest"]).exists()]
+    files = []
+    deleted = errors = skipped = 0
     emit(("status", "Aussortierte Dateien werden gelöscht..."))
-    for i, path in enumerate(files):
+    for i, move in enumerate(pending):
         if i % 25 == 0:
-            emit(("progress", i, len(files), "Löschen"))
+            emit(("progress", i, len(pending), "Löschen"))
+        path = move["dest"]
+        # The kept copy may have been deleted or edited since the move; then
+        # this "duplicate" is the last copy and must survive.
+        keepers = [k for k in move.get("keepers", []) if Path(k).exists() and not _same_file(k, path)]
+        if not keepers:
+            skipped += 1
+            emit(("log", f"Nicht gelöscht, das behaltene Original ist nicht mehr da: {path}"))
+            continue
+        if not permanent and send2trash is None:
+            errors += 1
+            emit(("log", "FEHLER: Papierkorb-Funktion nicht verfügbar – nichts gelöscht."))
+            break
         try:
-            if permanent or send2trash is None:
+            if permanent:
                 os.remove(path)
             else:
                 send2trash(path)
             deleted += 1
+            files.append(path)
         except Exception as e:
             errors += 1
             emit(("log", f"FEHLER beim Löschen: {path} -> {e}"))
-    if errors == 0:
+    if errors == 0 and skipped == 0:
         journal.mark(STATE_DELETED)
     if header.get("output_path"):
         _prune_empty_dirs(files, header["output_path"])
     emit(("progress", 1, 1, "Löschen"))
     target = "endgültig gelöscht" if permanent else "in den Papierkorb gelegt"
-    emit(("log", f"{deleted} Dateien {target}, {errors} Fehler."))
-    emit(("delete_done", {"deleted": deleted, "errors": errors, "permanent": permanent}))
+    emit(("log", f"{deleted} Dateien {target}, {skipped} zum Schutz behalten, {errors} Fehler."))
+    emit(("delete_done", {"deleted": deleted, "errors": errors, "skipped": skipped, "permanent": permanent}))

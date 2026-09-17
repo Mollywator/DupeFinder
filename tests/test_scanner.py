@@ -59,6 +59,20 @@ def test_similar_images_grouped_best_first(tmp_path, stop, events):
     assert [d["path"] for d in group["duplicates"]] == [str(small)]
 
 
+def test_exif_rotated_original_matches_rotated_copy(tmp_path, stop, events):
+    root = tmp_path / "Bilder"
+    source = make_photo(root / "tmp.png", 11, size=(1200, 900))
+    with Image.open(source) as img:
+        exif = Image.Exif()
+        exif[0x0112] = 6  # camera stores "rotate 90° clockwise" as a flag only
+        img.save(root / "handy.jpg", quality=95, exif=exif)
+        img.transpose(Image.Transpose.ROTATE_270).resize((450, 600)).save(root / "whatsapp.jpg", quality=70)
+    source.unlink()
+
+    done = run_scan(root, tmp_path / "out", stop, events, threshold=95)
+    assert done["similar"] == 1
+
+
 def test_similar_scan_reuses_cached_phash(tmp_path, stop, events, monkeypatch):
     root = tmp_path / "Bilder"
     make_photo(root / "a.png", 1)
@@ -130,3 +144,13 @@ def test_atomic_write_leaves_no_temp_files(isolated_home):
     storage.save_progress({"a": 2})
     assert storage.load_progress() == {"a": 2}
     assert [p.name for p in isolated_home.iterdir()] == ["progress.json"]
+
+
+def test_100_percent_tolerates_reencoding_only():
+    assert scanner.max_distance_for(100) == scanner.max_distance_for(scanner.IDENTICAL_SIMILARITY) == 7
+    assert scanner.max_distance_for(80) == 51
+
+
+def test_every_slider_value_has_a_description():
+    texts = {scanner.describe_level(p) for p in range(80, 101)}
+    assert len(texts) == len(scanner.LEVEL_DESCRIPTIONS)

@@ -136,3 +136,101 @@ def test_review_can_keep_a_different_image(tmp_path, stop, events):
     group = {"type": "similar", "original": {"path": str(a)}, "duplicates": [{"path": str(b)}]}
     move(root, out, build_approved_groups([group], [{str(a)}]), stop, events)
     assert not a.exists() and b.exists()
+
+
+# ─── Safety hardening ─────────────────────────────────────────────────────
+
+import subprocess
+import sys
+
+import pytest
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="NTFS junctions")
+
+
+def make_junction(link, target):
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+
+
+@windows_only
+def test_junction_is_not_reported_as_duplicate(tmp_path, stop, events):
+    root, out = tmp_path / "Bilder", tmp_path / "out"
+    make_photo(root / "Urlaub" / "foto.jpg", 1)
+    make_junction(root / "Verknuepfung", root / "Urlaub")
+    assert scan_groups(root, out, stop, events) == []
+
+
+@windows_only
+def test_same_physical_file_is_never_moved(tmp_path, stop, events):
+    root, out = tmp_path / "Bilder", tmp_path / "out"
+    photo = make_photo(root / "Urlaub" / "foto.jpg", 1)
+    make_junction(root / "Verknuepfung", root / "Urlaub")
+    alias = root / "Verknuepfung" / "foto.jpg"
+    group = {"type": "exact", "original": {"path": str(photo)}, "duplicates": [{"path": str(alias)}]}
+
+    assert move(root, out, [group], stop, events)["moved"] == 0
+    assert photo.exists()
+
+
+def test_keeper_edited_after_scan_blocks_move(tmp_path, stop, events):
+    root, out = tmp_path / "Bilder", tmp_path / "out"
+    original, copy = make_pair(root)
+    groups = scan_groups(root, out, stop, events)
+    os.utime(original, (3_000_000, 3_000_000))  # edited/replaced since the scan
+
+    assert move(root, out, groups, stop, events)["moved"] == 0
+    assert copy.exists()
+
+
+def test_delete_keeps_file_when_original_vanished(tmp_path, stop, events, monkeypatch):
+    root, out = tmp_path / "Bilder", tmp_path / "out"
+    original, copy = make_pair(root)
+    move(root, out, scan_groups(root, out, stop, events), stop, events)
+    original.unlink()  # the kept copy is gone — the moved one is now the last copy
+    monkeypatch.setattr(mover, "send2trash", lambda p: os.remove(p))
+
+    mover.delete_moved(mover.open_journals()[0], events)
+    assert events.last("delete_done")["skipped"] == 1
+    assert (out / "Kopien" / "foto.jpg").exists()
+    assert mover.open_journals()  # still undoable
+
+
+def test_missing_recycle_bin_support_deletes_nothing(tmp_path, stop, events, monkeypatch):
+    root, out = tmp_path / "Bilder", tmp_path / "out"
+    make_pair(root)
+    move(root, out, scan_groups(root, out, stop, events), stop, events)
+    monkeypatch.setattr(mover, "send2trash", None)
+
+    mover.delete_moved(mover.open_journals()[0], events)
+    assert events.last("delete_done")["deleted"] == 0
+    assert (out / "Kopien" / "foto.jpg").exists()
+
+
+def test_failed_move_is_not_undone_or_deleted(tmp_path, stop, events, monkeypatch):
+    root, out = tmp_path / "Bilder", tmp_path / "out"
+    _, copy = make_pair(root)
+    groups = scan_groups(root, out, stop, events)
+
+    def broken_move(src, dest):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mover.shutil, "move", broken_move)
+    assert move(root, out, groups, stop, events)["errors"] == 1
+    assert copy.exists()
+    assert mover.open_journals() == []
+
+
+def test_journal_written_before_the_move(tmp_path, stop, events, monkeypatch):
+    root, out = tmp_path / "Bilder", tmp_path / "out"
+    make_pair(root)
+    groups = scan_groups(root, out, stop, events)
+    seen = []
+    real_move = mover.shutil.move
+
+    def spy(src, dest):
+        seen.append(len(mover.Journal(next(mover.storage.journal_dir().glob("*.jsonl"))).moves))
+        return real_move(src, dest)
+
+    monkeypatch.setattr(mover.shutil, "move", spy)
+    move(root, out, groups, stop, events)
+    assert seen == [1]

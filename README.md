@@ -11,6 +11,10 @@ offline, nothing is ever deleted without asking.
   (to the recycle bin; with an explicit warning on network drives) is a separate,
   confirmed step.
 - Scans can be cancelled and resumed; hashes are cached between runs.
+- Similarity levels are calibrated on real photos: **100 %** finds the same photo in any size or
+  quality; lower levels add edited copies and burst shots. The UI explains each level.
+- Links and junctions are never followed, so a file can never be reported as its own duplicate.
+- Network drives: file stats come from the directory listing and hashing runs in parallel.
 
 ## Anleitung (Deutsch)
 
