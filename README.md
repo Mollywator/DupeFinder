@@ -53,12 +53,16 @@ pwsh ./build.ps1
 | `src/dupefinder/mover.py` | Move with journal, undo, delete to recycle bin |
 | `src/dupefinder/review.py` | Thumbnail review window for similar groups |
 | `src/dupefinder/gui.py` | Main window (German UI) |
-| `src/dupefinder/storage.py` | State under `%LOCALAPPDATA%\DupeFinder` (atomic writes) |
+| `src/dupefinder/storage.py` | State in `DupeFinder-Daten` next to the exe (atomic writes) |
+| `src/dupefinder/placement.py` | First start: moves the exe into its own subfolder if its folder holds other files |
 | `tests/` | pytest suite for scanner and mover |
 
 ### State on disk
 
-All runtime data lives in `%LOCALAPPDATA%\DupeFinder` (override with `DUPEFINDER_HOME`):
+All runtime data lives in one folder, `DupeFinder-Daten`, right next to the exe (or next to
+`DupeFinder.pyw` when run from source; override with `DUPEFINDER_HOME`). Nothing is written anywhere
+else — delete everything except the exe to reset completely. On the first start the exe moves itself
+into a `DupeFinder` subfolder if its folder contains other files. Contents:
 `progress.json` (hash cache + last results), `bericht.txt` (report), `settings.json`,
 `journale/*.jsonl` (one journal per move run).
 

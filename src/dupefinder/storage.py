@@ -1,27 +1,44 @@
 """
 Where DupeFinder keeps its state.
 
-Everything lives under %LOCALAPPDATA%\\DupeFinder. The old layout wrote next to
-the script, which breaks as soon as the program is packaged: a PyInstaller
-one-file build unpacks into a fresh temp folder on every start, so the scan
-cache and the undo journals would vanish with each run.
+Everything the program creates lives in one folder, "DupeFinder-Daten", right
+next to the exe (or next to DupeFinder.pyw when run from source). Nothing is
+written to %LOCALAPPDATA% or anywhere else, so deleting that folder resets the
+program completely and leaves no residue on the machine.
+
+The location is taken from the exe's path, never from ``__file__``: a
+PyInstaller one-file build runs from a temp folder that is wiped on exit.
 """
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
 APP_NAME = "DupeFinder"
+DATA_FOLDER = "DupeFinder-Daten"
+
+_app_dir_override = None
+
+
+def app_dir():
+    """The folder the user placed the program in."""
+    if _app_dir_override is not None:
+        return _app_dir_override
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+def set_app_dir(path):
+    global _app_dir_override
+    _app_dir_override = Path(path)
 
 
 def data_dir():
     base = os.environ.get("DUPEFINDER_HOME")
-    if base:
-        root = Path(base)
-    else:
-        local = os.environ.get("LOCALAPPDATA")
-        root = Path(local) / APP_NAME if local else Path.home() / f".{APP_NAME.lower()}"
+    root = Path(base) if base else app_dir() / DATA_FOLDER
     root.mkdir(parents=True, exist_ok=True)
     return root
 

@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from . import __version__, mover, scanner, storage
+from . import __version__, mover, placement, scanner, storage
 from .review import ReviewWindow
 
 ICON = Path(__file__).parent / "icon.ico"
@@ -460,4 +460,45 @@ class DupeFinderApp(ctk.CTk):
 def main():
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
-    DupeFinderApp().mainloop()
+
+    moved = move_error = None
+    exe = placement.running_exe()
+    if exe is not None:
+        try:
+            moved = placement.first_start(exe)
+        except OSError as e:
+            move_error = e
+
+    try:
+        placement.check_writable(storage.data_dir())
+    except OSError as e:
+        root = ctk.CTk()
+        root.withdraw()
+        messagebox.showerror(
+            "DupeFinder kann hier nicht speichern",
+            f"Ich lege meine Einstellungen im Ordner „{storage.DATA_FOLDER}“ direkt neben mir ab, "
+            f"aber hier darf ich nicht schreiben:\n\n{storage.app_dir()}\n\n({e})\n\n"
+            "Bitte lege die DupeFinder.exe in einen eigenen Ordner, z. B. unter „Dokumente“, und starte sie dort.",
+            parent=root,
+        )
+        root.destroy()
+        return
+
+    app = DupeFinderApp()
+    if moved:
+        app.after(400, lambda: messagebox.showinfo(
+            "DupeFinder ist umgezogen",
+            "Ich habe mich in einen Unterordner geschoben, damit ich den Ordner nicht überflute:\n\n"
+            f"{moved.parent}\n\n"
+            f"Meine Einstellungen liegen dort im Ordner „{storage.DATA_FOLDER}“. "
+            "Starte mich künftig von dort.",
+            parent=app,
+        ))
+    elif move_error:
+        app.after(400, lambda: messagebox.showwarning(
+            "DupeFinder",
+            f"Ich wollte mich in einen eigenen Unterordner verschieben, das ging aber nicht:\n{move_error}\n\n"
+            f"Ich bleibe hier; meine Einstellungen liegen im Ordner „{storage.DATA_FOLDER}“ neben mir.",
+            parent=app,
+        ))
+    app.mainloop()
