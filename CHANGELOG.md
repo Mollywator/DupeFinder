@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0
+
+- **100 % now means visually identical.** Every similarity hit at that level is verified pixel
+  by pixel (blurred, so compression noise drops out). Painted strokes, changed text in a
+  screenshot or a different head position are rejected instead of proposed. Calibrated on
+  public sample images: re-encoded and resized copies score 0.000 %, a painted stroke 0.27 %,
+  a changed line of text 0.011–0.029 %; the limit is 0.005 %.
+- **Tiny and flat images are left out of the similarity scan** (under 32 px on a side, or
+  near single-colour). A folder of accidental mini-screenshots no longer forms one big group.
+  They are still found as exact copies.
+- Known limit: an edit in a colour close to its background (a blue stroke on blue sky) can
+  still pass the check.
+
 ## 1.2.0
 
 - **All data next to the exe.** Settings, scan cache, report and undo journals live in a
