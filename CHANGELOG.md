@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0
+
+- **All data next to the exe.** Settings, scan cache, report and undo journals live in a
+  `DupeFinder-Daten` folder beside `DupeFinder.exe`; nothing is written anywhere else.
+  Deleting everything except the exe resets the program completely.
+- **Tidy first start.** If the exe is started in a folder that holds other files, it moves
+  itself into a `DupeFinder` subfolder and says so. This check runs only on the first start.
+
 ## 1.1.0
 
 - **Similarity search calibrated on real photos.** 256-bit perceptual hash; at 100 % the
