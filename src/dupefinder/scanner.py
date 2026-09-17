@@ -341,6 +341,11 @@ def _walk(root, output_path, emit):
         subdirs = []
         for entry in entries:
             try:
+                # Links and junctions lead to files that are already reachable
+                # elsewhere; following them would report a file as its own duplicate.
+                if entry.is_symlink() or (hasattr(entry, "is_junction") and entry.is_junction()):
+                    emit(("log", f"Verknüpfung übersprungen: {entry.path}"))
+                    continue
                 if entry.is_dir(follow_symlinks=False):
                     subdirs.append(entry.path)
                 elif os.path.splitext(entry.name)[1].lower() in EXTENSIONS:

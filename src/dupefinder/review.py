@@ -194,6 +194,8 @@ class ReviewWindow(ctk.CTkToplevel):
                 "Ja = für diese den Vorschlag übernehmen (alles außer dem besten Bild aussortieren)\n"
                 "Nein = diese Gruppen nicht anfassen\n"
                 "Abbrechen = weiter prüfen",
+                # A hasty Enter must not move pictures nobody looked at.
+                default=messagebox.NO,
                 parent=self,
             )
             if answer is None:

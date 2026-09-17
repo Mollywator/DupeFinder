@@ -308,7 +308,7 @@ class DupeFinderApp(ctk.CTk):
         if info["skipped"] or info["errors"]:
             text += f"\n({_dots(info['skipped'])} übersprungen, {_dots(info['errors'])} Fehler – siehe Protokoll)\n"
         text += "\nSchau sie dir gerne vorher an.\n\nSollen die aussortierten Dateien jetzt gelöscht werden?"
-        if messagebox.askyesno("Aussortieren abgeschlossen", text, parent=self):
+        if messagebox.askyesno("Aussortieren abgeschlossen", text, default=messagebox.NO, parent=self):
             self._delete(confirmed=True)
         else:
             self._log("Die Dateien bleiben im Aussortiert-Ordner. Später löschen oder zurücklegen ist jederzeit möglich.")
@@ -342,12 +342,12 @@ class DupeFinderApp(ctk.CTk):
                 "Achtung: kein Papierkorb",
                 f"Die {_dots(len(files))} Dateien liegen auf einem Netzlaufwerk. Dort gibt es keinen Papierkorb – "
                 "sie wären ENDGÜLTIG weg und können nicht wiederhergestellt werden.\n\nWirklich endgültig löschen?",
-                icon="warning", parent=self,
+                icon="warning", default=messagebox.NO, parent=self,
             ):
                 return
         elif not confirmed and not messagebox.askyesno(
             "Aussortierte Dateien löschen",
-            f"{_dots(len(files))} aussortierte Dateien in den Papierkorb legen?", parent=self,
+            f"{_dots(len(files))} aussortierte Dateien in den Papierkorb legen?", default=messagebox.NO, parent=self,
         ):
             return
         self._run(self._delete_all, journals, permanent)
