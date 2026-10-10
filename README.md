@@ -71,3 +71,7 @@ into a `DupeFinder` subfolder if its folder contains other files. Contents:
 
 Bump `__version__` in `src/dupefinder/__init__.py`, commit, then tag `vX.Y.Z` and push the tag.
 CI runs the tests, builds the exe and attaches it to a GitHub release.
+
+## License
+
+[MIT](LICENSE)
