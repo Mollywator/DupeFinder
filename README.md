@@ -1,7 +1,7 @@
 # DupeFinder
 
 Finds duplicate photos and videos in a folder tree and moves them aside — fully
-offline, nothing is ever deleted without asking.
+offline, the program never deletes anything.
 
 - **Exact duplicates** (byte-identical copies) via size → 64 KB partial hash → full SHA-256.
 - **Similar images** (resized, recompressed, sent via WhatsApp) via perceptual hashing.
